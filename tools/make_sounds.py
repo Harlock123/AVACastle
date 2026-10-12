@@ -103,6 +103,22 @@ for f in (523, 659, 784, 1047):
     notes += sweep(0.09, f, f, square, release=0.3)
 write("ExtraLife.wav", notes, 0.35)
 
+# The castle's background drone, one file per stage: a low hum that throbs, and climbs in pitch and
+# throbs faster at later castles. Each file holds a whole number of throbs and every throb falls to
+# silence, so the small gap between loops (the player restarts the file) lands where nothing is heard.
+for stage, (freq, rate) in enumerate([(55, 2.0), (62, 2.4), (70, 2.8), (79, 3.3)], start=1):
+    pulses = round(3.2 * rate)
+    total = n(pulses / rate)
+    hum, p1, p2 = [], 0.0, 0.0
+    for i in range(total):
+        p1 += freq / RATE
+        p2 += freq * 1.007 / RATE  # a slightly detuned twin, for a slow beating
+        tone = (0.55 * tri(p1) + 0.45 * tri(p2)
+                + 0.5 * math.sin(2 * math.pi * 2 * p1) + 0.3 * math.sin(2 * math.pi * 3 * p2))
+        beat = (0.5 - 0.5 * math.cos(2 * math.pi * rate * i / RATE)) ** 1.5
+        hum.append(tone * beat)
+    write(f"Drone{stage}.wav", hum, 0.32)
+
 # Thrust: soft rumbling noise, flat so it loops cleanly.
 total = n(0.5)
 last, rumble = 0.0, []

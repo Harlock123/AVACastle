@@ -77,7 +77,10 @@ public class GameCanvas : Control
         {
             _engine.Sound.IsMuted = !_engine.Sound.IsMuted;
             if (_engine.Sound.IsMuted)
+            {
                 _engine.Sound.StopThruster();
+                _engine.Sound.StopDrone();
+            }
             e.Handled = true;
             return;
         }

@@ -163,6 +163,7 @@ public class GameEngine : IDisposable
         UpdateShip(deltaTime, shootPressed);
         UpdateBullets(deltaTime);
         UpdateCastle(deltaTime);
+        UpdateDrone();
         UpdateMines(deltaTime);
         UpdateFireballs(deltaTime);
         UpdateExplosions(deltaTime);
@@ -175,6 +176,7 @@ public class GameEngine : IDisposable
         {
             State = GameState.Paused;
             Sound.StopThruster();
+            Sound.StopDrone();
         }
     }
 
@@ -269,6 +271,16 @@ public class GameEngine : IDisposable
             Fireballs.Add(fireball);
             Sound.PlayFireball();
         }
+    }
+
+    // The castle hums while it stands, a step higher every two castles; it falls silent when the
+    // castle is destroyed, and comes back with the next one.
+    private void UpdateDrone()
+    {
+        if (State == GameState.Playing && Castle != null)
+            Sound.PlayDrone(Math.Clamp((Level + 1) / 2, 1, SoundManager.DroneStages));
+        else
+            Sound.StopDrone();
     }
 
     private void UpdateMines(double deltaTime)
@@ -475,6 +487,7 @@ public class GameEngine : IDisposable
         }
 
         State = GameState.GameOver;
+        Sound.StopDrone();
         _gameOverTimer = GameOverInputDelay;
         if (Score > HighScore)
         {

@@ -9,6 +9,12 @@ public class SoundManager : IDisposable
     private readonly string _soundsPath;
     private Player? _thrusterPlayer;
     private bool _thrusterPlaying;
+    private Player? _dronePlayer;
+    private bool _dronePlaying;
+    private int _droneStage;
+    private int _droneGeneration;
+
+    public const int DroneStages = 4;
 
     public bool IsMuted { get; set; } = false;
 
@@ -75,6 +81,79 @@ public class SoundManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Starts the castle's background drone, or changes its stage (1 to 4, higher and faster). Safe to
+    /// call every frame: it only starts once, and a new stage takes over at the end of the current loop.
+    /// </summary>
+    public void PlayDrone(int stage)
+    {
+        _droneStage = Math.Clamp(stage, 1, DroneStages);
+        if (IsMuted || _dronePlaying) return;
+
+        _dronePlaying = true;
+        PlayDroneLoop(++_droneGeneration);
+    }
+
+    // Each start gets its own generation, so a loop left over from before a quick stop/start
+    // (pausing and resuming, say) ends instead of playing over the new one.
+    private async void PlayDroneLoop(int generation)
+    {
+        var player = new Player();
+        _dronePlayer = player;
+
+        try
+        {
+            while (_dronePlaying && generation == _droneGeneration)
+            {
+                var path = Path.Combine(_soundsPath, $"Drone{_droneStage}.wav");
+                if (!File.Exists(path)) break;
+
+                await player.Play(path);
+
+                while (player.Playing && _dronePlaying && generation == _droneGeneration)
+                {
+                    await System.Threading.Tasks.Task.Delay(20);
+                }
+            }
+        }
+        catch
+        {
+            // Silently ignore playback errors
+        }
+        finally
+        {
+            if (generation == _droneGeneration)
+                _dronePlaying = false;
+            else
+                StopQuietly(player);
+        }
+    }
+
+    public void StopDrone()
+    {
+        _dronePlaying = false;
+        try
+        {
+            _dronePlayer?.Stop();
+        }
+        catch
+        {
+            // Silently ignore stop errors
+        }
+    }
+
+    private static void StopQuietly(Player player)
+    {
+        try
+        {
+            player.Stop();
+        }
+        catch
+        {
+            // Silently ignore stop errors
+        }
+    }
+
     private async void PlaySound(string filename)
     {
         if (IsMuted) return;
@@ -97,5 +176,6 @@ public class SoundManager : IDisposable
     public void Dispose()
     {
         StopThruster();
+        StopDrone();
     }
 }
