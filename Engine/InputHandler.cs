@@ -72,6 +72,13 @@ public class InputHandler : IDisposable
 
     public bool IsControllerConnected => _controller.IsConnected;
 
+    /// <summary>Any key, mouse button, wheel turn or controller input at all this frame.</summary>
+    public bool IsAnyInput =>
+        _pressedKeys.Count > 0 ||
+        _leftMousePressed || _rightMousePressed || _mouseWheelDelta != 0 ||
+        IsRotatingLeft || IsRotatingRight || IsThrusting || IsShooting ||
+        IsPausePressed || IsBackPressed || _controller.ButtonY;
+
     public bool IsRotatingLeft =>
         IsKeyPressed(Key.A) ||
         IsKeyPressed(Key.Left) ||

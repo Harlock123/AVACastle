@@ -18,6 +18,11 @@ public class SoundManager : IDisposable
 
     public bool IsMuted { get; set; } = false;
 
+    /// <summary>Set during attract mode: the game is silent without touching the player's mute setting.</summary>
+    public bool IsSilenced { get; set; }
+
+    private bool IsQuiet => IsMuted || IsSilenced;
+
     public SoundManager()
     {
         _soundsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Sounds");
@@ -35,7 +40,7 @@ public class SoundManager : IDisposable
 
     public void PlayThruster()
     {
-        if (IsMuted || _thrusterPlaying) return;
+        if (IsQuiet || _thrusterPlaying) return;
 
         _thrusterPlaying = true;
         PlayThrusterLoop();
@@ -88,7 +93,7 @@ public class SoundManager : IDisposable
     public void PlayDrone(int stage)
     {
         _droneStage = Math.Clamp(stage, 1, DroneStages);
-        if (IsMuted || _dronePlaying) return;
+        if (IsQuiet || _dronePlaying) return;
 
         _dronePlaying = true;
         PlayDroneLoop(++_droneGeneration);
@@ -156,7 +161,7 @@ public class SoundManager : IDisposable
 
     private async void PlaySound(string filename)
     {
-        if (IsMuted) return;
+        if (IsQuiet) return;
 
         var path = Path.Combine(_soundsPath, filename);
         if (!File.Exists(path)) return;

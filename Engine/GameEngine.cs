@@ -13,7 +13,8 @@ public enum GameState
     StartScreen,
     Playing,
     Paused,
-    GameOver
+    GameOver,
+    Attract
 }
 
 public class GameEngine : IDisposable
@@ -32,6 +33,9 @@ public class GameEngine : IDisposable
     private const double RespawnDelay = 2.0;
     private const double CastleRebuildDelay = 3.0;
     private const double GameOverInputDelay = 1.0;
+    private const double AttractIdleDelay = 20.0;   // seconds on the title screen before the demo
+    private const double AttractLength = 60.0;      // longest a demo runs
+    private const double GameOverIdleDelay = 20.0;  // seconds on game over before the title returns
 
     // Colours of the original cabinet's screen overlay, by ring slot (outer, middle, inner).
     public static readonly Color[] SlotColors =
@@ -59,7 +63,7 @@ public class GameEngine : IDisposable
     /// <summary>Seconds left before the next castle appears, while the old one is a smoking crater.</summary>
     public double CastleRebuildTimer { get; private set; }
 
-    public bool IsThrusting => State == GameState.Playing && ShipAlive && Input.IsThrusting;
+    public bool IsThrusting => ShipAlive && (State is GameState.Playing or GameState.Attract) && _controls.Thrust;
 
     public InputHandler Input { get; } = new();
     public SoundManager Sound { get; } = new();
@@ -71,6 +75,11 @@ public class GameEngine : IDisposable
     private double _bounceSoundTimer;
     private double _gameOverTimer;
     private double _demoAngle;
+    private double _idleTimer;
+    private double _attractTimer;
+    private bool _wasAnyInputLastFrame;
+    private ShipControls _controls;
+    private readonly AttractPilot _pilot = new();
 
     private static readonly string HighScorePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AVACastle", "highscore.txt");
@@ -107,10 +116,44 @@ public class GameEngine : IDisposable
 
     public void StartNewGame()
     {
+        BeginRun(GameState.Playing);
+        Sound.PlayRegenerate();
+    }
+
+    /// <summary>
+    /// The game plays itself, silently, until it runs out of ships or time, then goes back to the
+    /// title. Fire starts a real game; anything else returns to the title.
+    /// </summary>
+    public void StartAttract()
+    {
+        BeginRun(GameState.Attract);
+        _pilot.Reset(Ship.Position);
+        _attractTimer = AttractLength;
+    }
+
+    public void ReturnToTitle()
+    {
+        State = GameState.StartScreen;
+        Sound.StopThruster();
+        Sound.StopDrone();
+        Sound.IsSilenced = false;
+        ShipAlive = false;
+        Bullets.Clear();
+        Mines.Clear();
+        Fireballs.Clear();
+        Explosions.Clear();
+        Castle = new Castle(Center, 1, growFromCore: false);
+        _idleTimer = 0;
+    }
+
+    private void BeginRun(GameState state)
+    {
+        State = state;
+        Sound.IsSilenced = state == GameState.Attract;
+        Sound.StopThruster();
         Score = 0;
         Lives = StartingLives;
         Level = 1;
-        State = GameState.Playing;
 
         Bullets.Clear();
         Mines.Clear();
@@ -118,7 +161,6 @@ public class GameEngine : IDisposable
         Explosions.Clear();
 
         Castle = new Castle(Center, Level);
-        Sound.PlayRegenerate();
         SpawnShip();
     }
 
@@ -139,6 +181,8 @@ public class GameEngine : IDisposable
     {
         bool shootPressed = Input.IsShooting && !_wasShootingLastFrame;
         _wasShootingLastFrame = Input.IsShooting;
+        bool newInput = Input.IsAnyInput && !_wasAnyInputLastFrame;
+        _wasAnyInputLastFrame = Input.IsAnyInput;
 
         switch (State)
         {
@@ -146,21 +190,60 @@ public class GameEngine : IDisposable
                 return;
 
             case GameState.StartScreen:
-                UpdateDemo(deltaTime);
+                UpdateIdleCastle(deltaTime);
                 if (shootPressed)
+                {
                     StartNewGame();
+                    return;
+                }
+                _idleTimer = Input.IsAnyInput ? 0 : _idleTimer + deltaTime;
+                if (_idleTimer >= AttractIdleDelay)
+                    StartAttract();
                 return;
 
             case GameState.GameOver:
-                UpdateDemo(deltaTime);
+                UpdateIdleCastle(deltaTime);
                 UpdateExplosions(deltaTime);
                 _gameOverTimer -= deltaTime;
                 if (shootPressed && _gameOverTimer <= 0)
+                {
                     StartNewGame();
+                    return;
+                }
+                _idleTimer = Input.IsAnyInput ? 0 : _idleTimer + deltaTime;
+                if (_idleTimer >= GameOverIdleDelay)
+                    ReturnToTitle();
                 return;
+
+            case GameState.Attract:
+                if (shootPressed)
+                {
+                    StartNewGame();
+                    return;
+                }
+                if (newInput)
+                {
+                    ReturnToTitle();
+                    return;
+                }
+                _attractTimer -= deltaTime;
+                if (_attractTimer <= 0)
+                {
+                    ReturnToTitle();
+                    return;
+                }
+                _controls = _pilot.Fly(this, deltaTime);
+                break;
+
+            default:
+                _controls = new ShipControls(Input.IsRotatingLeft, Input.IsRotatingRight, Input.IsThrusting, Input.IsShooting);
+                break;
         }
 
-        UpdateShip(deltaTime, shootPressed);
+        // The pilot's fire button is edge-triggered just like the player's.
+        bool firePressed = State == GameState.Attract ? _controls.Fire : shootPressed;
+
+        UpdateShip(deltaTime, firePressed);
         UpdateBullets(deltaTime);
         UpdateCastle(deltaTime);
         UpdateDrone();
@@ -189,7 +272,7 @@ public class GameEngine : IDisposable
     }
 
     // On the title and game-over screens the castle keeps turning and the cannon sweeps around.
-    private void UpdateDemo(double deltaTime)
+    private void UpdateIdleCastle(double deltaTime)
     {
         if (Castle == null)
             Castle = new Castle(Center, 1);
@@ -210,16 +293,16 @@ public class GameEngine : IDisposable
             return;
         }
 
-        if (Input.IsRotatingLeft)
+        if (_controls.RotateLeft)
             Ship.RotateLeft(deltaTime);
-        if (Input.IsRotatingRight)
+        if (_controls.RotateRight)
             Ship.RotateRight(deltaTime);
 
         // Apply mouse wheel rotation directly (faster than key rotation)
-        if (Input.MouseWheelDelta != 0)
+        if (State == GameState.Playing && Input.MouseWheelDelta != 0)
             Ship.Rotation += Input.MouseWheelDelta * 0.3;
 
-        if (Input.IsThrusting)
+        if (_controls.Thrust)
         {
             Ship.Thrust(deltaTime);
             Sound.PlayThruster();
@@ -228,7 +311,7 @@ public class GameEngine : IDisposable
         {
             Sound.StopThruster();
         }
-        _wasThrustingLastFrame = Input.IsThrusting;
+        _wasThrustingLastFrame = _controls.Thrust;
 
         if (shootPressed)
         {
@@ -270,6 +353,7 @@ public class GameEngine : IDisposable
         {
             Fireballs.Add(fireball);
             Sound.PlayFireball();
+            _pilot.OnCannonFired();
         }
     }
 
@@ -483,6 +567,14 @@ public class GameEngine : IDisposable
         if (Lives > 0)
         {
             _respawnTimer = RespawnDelay;
+            return;
+        }
+
+        // A demo that runs out of ships lingers on the explosion, then hands back to the title.
+        // It never ends in Game Over and never touches the high score.
+        if (State == GameState.Attract)
+        {
+            _attractTimer = Math.Min(_attractTimer, 2.5);
             return;
         }
 

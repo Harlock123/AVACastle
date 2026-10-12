@@ -91,6 +91,10 @@ public class GameCanvas : Control
             {
                 _engine.Pause();
             }
+            else if (_engine.State == GameState.Attract)
+            {
+                _engine.ReturnToTitle();
+            }
             else
             {
                 var window = TopLevel.GetTopLevel(this) as Window;
@@ -358,7 +362,9 @@ public class GameCanvas : Control
         }
 
         context.DrawText(Text($"SCORE {_engine.Score}", 22, TextColor), new Point(20, 16));
-        DrawCentredText(context, $"HIGH {Math.Max(_engine.HighScore, _engine.Score)}", 18, 18, TextColor);
+        // A demo's score is the pilot's, not the player's: it never shows as the high score.
+        int high = _engine.State == GameState.Attract ? _engine.HighScore : Math.Max(_engine.HighScore, _engine.Score);
+        DrawCentredText(context, $"HIGH {high}", 18, 18, TextColor);
 
         var level = Text($"CASTLE {_engine.Level}", 22, TextColor);
         context.DrawText(level, new Point(GameEngine.Width - level.Width - 20, 16));
@@ -374,6 +380,13 @@ public class GameCanvas : Control
         {
             var muted = Text("MUTED", 14, TextColor);
             context.DrawText(muted, new Point(GameEngine.Width - muted.Width - 20, 46));
+        }
+
+        if (_engine.State == GameState.Attract)
+        {
+            DrawCentredText(context, "DEMO", 40, 70, Color.FromRgb(255, 225, 74));
+            if ((int)(DateTime.Now.TimeOfDay.TotalSeconds * 2) % 2 == 0)
+                DrawCentredText(context, "Press SPACE or X to play", 26, GameEngine.Height - 80, Colors.White);
         }
 
         if (_engine.State == GameState.Paused)
