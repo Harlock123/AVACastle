@@ -72,6 +72,14 @@ public class InputHandler : IDisposable
 
     public bool IsControllerConnected => _controller.IsConnected;
 
+    // Controller-only menu inputs, for initials entry (the keyboard is handled key by key there).
+    public bool PadUp => _controller.DPadUp || _controller.LeftStickY < -0.5f;
+    public bool PadDown => _controller.DPadDown || _controller.LeftStickY > 0.5f;
+    public bool PadLeft => _controller.DPadLeft || _controller.LeftStickX < -0.5f;
+    public bool PadRight => _controller.DPadRight || _controller.LeftStickX > 0.5f;
+    public bool PadAccept => _controller.ButtonX || _controller.ButtonB || _controller.ButtonA;
+    public bool PadDone => _controller.ButtonStart;
+
     /// <summary>Any key, mouse button, wheel turn or controller input at all this frame.</summary>
     public bool IsAnyInput =>
         _pressedKeys.Count > 0 ||

@@ -73,6 +73,14 @@ public class GameCanvas : Control
             return;
         }
 
+        // While entering initials every key belongs to the entry (M is a letter, not mute).
+        if (_engine.State == GameState.EnterInitials)
+        {
+            _engine.InitialsKey(e.Key);
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Avalonia.Input.Key.M)
         {
             _engine.Sound.IsMuted = !_engine.Sound.IsMuted;
@@ -91,7 +99,7 @@ public class GameCanvas : Control
             {
                 _engine.Pause();
             }
-            else if (_engine.State == GameState.Attract)
+            else if (_engine.State is GameState.Attract or GameState.HighScores)
             {
                 _engine.ReturnToTitle();
             }
@@ -361,6 +369,12 @@ public class GameCanvas : Control
             return;
         }
 
+        if (_engine.State == GameState.HighScores)
+        {
+            DrawHighScoreTable(context);
+            return;
+        }
+
         context.DrawText(Text($"SCORE {_engine.Score}", 22, TextColor), new Point(20, 16));
         // A demo's score is the pilot's, not the player's: it never shows as the high score.
         int high = _engine.State == GameState.Attract ? _engine.HighScore : Math.Max(_engine.HighScore, _engine.Score);
@@ -398,10 +412,117 @@ public class GameCanvas : Control
         if (_engine.State == GameState.GameOver)
         {
             DrawCentredText(context, "GAME OVER", 52, GameEngine.Height / 2 - 250, Color.FromRgb(255, 60, 60));
-            if (_engine.Score >= _engine.HighScore && _engine.Score > 0)
-                DrawCentredText(context, "NEW HIGH SCORE", 22, GameEngine.Height / 2 - 185, Color.FromRgb(255, 225, 74));
-            DrawCentredText(context, "Press SPACE or X to play again", 22, GameEngine.Height / 2 + 180, TextColor);
+            if (_engine.IsEntryPending)
+                DrawCentredText(context, NewEntryHeadline, 22, GameEngine.Height / 2 - 185, Color.FromRgb(255, 225, 74));
+            else
+                DrawCentredText(context, "Press SPACE or X to play again", 22, GameEngine.Height / 2 + 180, TextColor);
         }
+
+        if (_engine.State == GameState.EnterInitials)
+            DrawInitialsEntry(context);
+    }
+
+    private string NewEntryHeadline => _engine.Score > _engine.HighScore ? "NEW HIGH SCORE" : "YOU MADE THE TOP TEN";
+
+    private static readonly Color Yellow = Color.FromRgb(255, 225, 74);
+
+    // A dark panel over the turning castle, for the entry and table screens.
+    private void DrawPanel(DrawingContext context, Rect rect)
+    {
+        context.FillRectangle(new SolidColorBrush(Color.FromArgb(215, 0, 0, 0)), rect);
+        DrawGlowPolygon(context, new[] { rect.TopLeft, rect.TopRight, rect.BottomRight, rect.BottomLeft }, Yellow, 0.6, 1.5);
+    }
+
+    private void DrawInitialsEntry(DrawingContext context)
+    {
+        var entry = _engine.Entry;
+        if (entry == null) return;
+
+        DrawPanel(context, new Rect(152, 110, 720, 560));
+        DrawCentredText(context, NewEntryHeadline, 40, 140, Yellow);
+        DrawCentredText(context, $"SCORE {_engine.Score}    CASTLE {_engine.Level}", 22, 200, TextColor);
+        DrawCentredText(context, "ENTER YOUR INITIALS", 24, 260, Colors.White);
+
+        bool blinkOn = (int)(DateTime.Now.TimeOfDay.TotalSeconds * 3) % 2 == 0;
+        const double cell = 100;
+        double left = (GameEngine.Width - cell * HighScoreTable.InitialsLength) / 2;
+        string initials = entry.Initials;
+
+        for (int i = 0; i < initials.Length; i++)
+        {
+            bool current = i == entry.Cursor;
+            char c = initials[i];
+            var letter = Text(c == ' ' ? "_" : c.ToString(), 76, current ? Colors.White : Yellow);
+            double x = left + i * cell + (cell - letter.Width) / 2;
+            context.DrawText(letter, new Point(x, 315));
+
+            if (current)
+            {
+                var up = Text("^", 22, TextColor);
+                var down = Text("v", 22, TextColor);
+                context.DrawText(up, new Point(left + i * cell + (cell - up.Width) / 2, 300));
+                context.DrawText(down, new Point(left + i * cell + (cell - down.Width) / 2, 418));
+                if (blinkOn)
+                    DrawGlowLine(context, new Point(left + i * cell + 18, 412), new Point(left + (i + 1) * cell - 18, 412), Colors.White, 1, 2.5);
+            }
+        }
+
+        string[] help =
+        {
+            "Type your initials, or UP/DOWN to choose a letter",
+            "and LEFT/RIGHT to move.  ENTER when done.",
+            "Gamepad: D-pad to choose, X to accept, START when done",
+            "Mouse: wheel to choose, click to accept"
+        };
+        double y = 480;
+        foreach (var line in help)
+        {
+            DrawCentredText(context, line, 16, y, TextColor);
+            y += 26;
+        }
+    }
+
+    private void DrawHighScoreTable(DrawingContext context)
+    {
+        DrawPanel(context, new Rect(192, 60, 640, 640));
+        DrawCentredText(context, "HIGH SCORES", 44, 80, Yellow);
+
+        const double rankX = 250, nameX = 340, scoreRight = 640, castleX = 690;
+        double y = 165;
+        context.DrawText(Text("RANK", 16, TextColor), new Point(rankX, y));
+        context.DrawText(Text("NAME", 16, TextColor), new Point(nameX, y));
+        var scoreHead = Text("SCORE", 16, TextColor);
+        context.DrawText(scoreHead, new Point(scoreRight - scoreHead.Width, y));
+        context.DrawText(Text("CASTLE", 16, TextColor), new Point(castleX, y));
+
+        bool blinkOn = (int)(DateTime.Now.TimeOfDay.TotalSeconds * 3) % 2 == 0;
+        var entries = _engine.Table.Entries;
+        y = 200;
+        for (int i = 0; i < HighScoreTable.Size; i++)
+        {
+            bool highlight = i == _engine.HighlightIndex;
+            var color = highlight ? (blinkOn ? Colors.White : Yellow) : i == 0 ? Yellow : Colors.White;
+            double alpha = highlight || i < 3 ? 1 : 0.85;
+            color = Color.FromArgb((byte)(255 * alpha), color.R, color.G, color.B);
+
+            string rank = $"{i + 1}.";
+            string name = i < entries.Count ? entries[i].Initials : "---";
+            string score = i < entries.Count ? entries[i].Score.ToString() : "0";
+            string castle = i < entries.Count && entries[i].Castle > 0 ? entries[i].Castle.ToString() : "-";
+
+            context.DrawText(Text(rank, 24, color), new Point(rankX, y));
+            context.DrawText(Text(name, 24, color), new Point(nameX, y));
+            var scoreText = Text(score, 24, color);
+            context.DrawText(scoreText, new Point(scoreRight - scoreText.Width, y));
+            context.DrawText(Text(castle, 24, color), new Point(castleX + 20, y));
+
+            if (highlight)
+                DrawGlowLine(context, new Point(rankX - 20, y + 15), new Point(rankX - 8, y + 15), color, 1, 2);
+            y += 42;
+        }
+
+        if ((int)(DateTime.Now.TimeOfDay.TotalSeconds * 2) % 2 == 0)
+            DrawCentredText(context, "Press SPACE or X to play", 24, 650, Colors.White);
     }
 
     private void DrawStartScreen(DrawingContext context)
@@ -449,7 +570,8 @@ public class GameCanvas : Control
         DrawColumn(context, controls, 40);
         DrawColumn(context, scoring, GameEngine.Width - 300);
 
-        DrawCentredText(context, $"HIGH SCORE {_engine.HighScore}", 20, GameEngine.Height - 120, TextColor);
+        var best = _engine.Table.Entries.Count > 0 ? _engine.Table.Entries[0] : null;
+        DrawCentredText(context, best == null ? "HIGH SCORE 0" : $"HIGH SCORE  {best.Initials.TrimEnd()}  {best.Score}", 20, GameEngine.Height - 120, TextColor);
 
         if ((int)(DateTime.Now.TimeOfDay.TotalSeconds * 2) % 2 == 0)
             DrawCentredText(context, "Press SPACE or X to start", 28, GameEngine.Height - 80, Colors.White);

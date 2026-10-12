@@ -98,3 +98,6 @@ Thumbs.db
 # However, bin/ and obj/ are definitely to be ignored.
 /.claude/settings.local.json
 /nul
+
+# Avalonia build-task scratch files
+.avalonia-build-tasks/

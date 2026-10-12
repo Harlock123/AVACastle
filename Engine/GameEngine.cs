@@ -14,7 +14,9 @@ public enum GameState
     Playing,
     Paused,
     GameOver,
-    Attract
+    Attract,
+    EnterInitials,
+    HighScores
 }
 
 public class GameEngine : IDisposable
@@ -36,6 +38,10 @@ public class GameEngine : IDisposable
     private const double AttractIdleDelay = 20.0;   // seconds on the title screen before the demo
     private const double AttractLength = 60.0;      // longest a demo runs
     private const double GameOverIdleDelay = 20.0;  // seconds on game over before the title returns
+    private const double GameOverBeforeEntry = 2.0; // "GAME OVER" shows this long before initials entry
+    private const double EntryInputGrace = 0.8;     // ignore input this long, so a mashed fire button doesn't enter letters
+    private const double EntryTimeout = 45.0;       // idle this long in entry and the initials are taken as they are
+    private const double HighScoresShowTime = 10.0; // the table stays up this long
 
     // Colours of the original cabinet's screen overlay, by ring slot (outer, middle, inner).
     public static readonly Color[] SlotColors =
@@ -55,7 +61,17 @@ public class GameEngine : IDisposable
     public List<(Point Position, double Brightness)> Stars { get; } = new();
 
     public int Score { get; private set; }
-    public int HighScore { get; private set; }
+    public HighScoreTable Table { get; } = HighScoreTable.Load();
+    public int HighScore => Table.TopScore;
+
+    /// <summary>The initials being entered, during GameState.EnterInitials.</summary>
+    public InitialsEntry? Entry { get; private set; }
+
+    /// <summary>The place a just-entered score took in the table (0 = top), or -1.</summary>
+    public int HighlightIndex { get; private set; } = -1;
+
+    /// <summary>The game just ended with a score that makes the table: initials entry follows.</summary>
+    public bool IsEntryPending => _entryPending;
     public int Lives { get; private set; }
     public int Level { get; private set; }
     public GameState State { get; private set; }
@@ -74,6 +90,13 @@ public class GameEngine : IDisposable
     private double _mineTimer;
     private double _bounceSoundTimer;
     private double _gameOverTimer;
+    private bool _entryPending;
+    private double _entryClock;
+    private double _entryIdle;
+    private double _padRepeat;
+    private bool _wasPadUp, _wasPadDown, _wasPadLeft, _wasPadRight, _wasPadAccept, _wasPadDone, _wasLeftMouse;
+    private double _tableTimer;
+    private bool _tableLeadsToDemo;
     private double _demoAngle;
     private double _idleTimer;
     private double _attractTimer;
@@ -81,15 +104,11 @@ public class GameEngine : IDisposable
     private ShipControls _controls;
     private readonly AttractPilot _pilot = new();
 
-    private static readonly string HighScorePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AVACastle", "highscore.txt");
-
     public GameEngine()
     {
         Ship = new Ship(SpawnPoints[0], 0);
         State = GameState.StartScreen;
         Castle = new Castle(Center, 1, growFromCore: false);
-        HighScore = LoadHighScore();
 
         for (int i = 0; i < 110; i++)
         {
@@ -101,6 +120,10 @@ public class GameEngine : IDisposable
 
     public void Dispose()
     {
+        // Closing the window mid-entry still keeps the score, under whatever initials are showing.
+        if (_entryPending)
+            CommitEntry();
+
         Sound.Dispose();
         Input.Dispose();
     }
@@ -144,6 +167,125 @@ public class GameEngine : IDisposable
         Explosions.Clear();
         Castle = new Castle(Center, 1, growFromCore: false);
         _idleTimer = 0;
+        HighlightIndex = -1;
+    }
+
+    /// <summary>
+    /// Shows the table: after a new entry (with it highlighted), or as part of the idle cycle on the
+    /// way from the title screen to the demo.
+    /// </summary>
+    private void ShowHighScores(bool leadsToDemo)
+    {
+        State = GameState.HighScores;
+        _tableTimer = HighScoresShowTime;
+        _tableLeadsToDemo = leadsToDemo;
+        if (leadsToDemo)
+            HighlightIndex = -1;
+    }
+
+    private void BeginInitials()
+    {
+        State = GameState.EnterInitials;
+        Entry = new InitialsEntry(Table.LastInitials);
+        _entryClock = 0;
+        _entryIdle = 0;
+        _wasPadUp = _wasPadDown = _wasPadLeft = _wasPadRight = _wasPadAccept = _wasPadDone = true;
+        _wasLeftMouse = true;
+    }
+
+    private void CommitEntry()
+    {
+        _entryPending = false;
+        string initials = Entry?.Initials ?? Table.LastInitials;
+        HighlightIndex = Table.Insert(initials, Score, Level);
+        Table.Save();
+        Entry = null;
+    }
+
+    private bool EntryAcceptsInput => State == GameState.EnterInitials && _entryClock >= EntryInputGrace && Entry != null;
+
+    /// <summary>Keyboard input during initials entry, passed straight from the window.</summary>
+    public void InitialsKey(Avalonia.Input.Key key)
+    {
+        if (!EntryAcceptsInput) return;
+        var entry = Entry!;
+        _entryIdle = 0;
+
+        if (key >= Avalonia.Input.Key.A && key <= Avalonia.Input.Key.Z)
+            entry.Type((char)('A' + (key - Avalonia.Input.Key.A)));
+        else if (key >= Avalonia.Input.Key.D0 && key <= Avalonia.Input.Key.D9)
+            entry.Type((char)('0' + (key - Avalonia.Input.Key.D0)));
+        else if (key >= Avalonia.Input.Key.NumPad0 && key <= Avalonia.Input.Key.NumPad9)
+            entry.Type((char)('0' + (key - Avalonia.Input.Key.NumPad0)));
+        else if (key is Avalonia.Input.Key.OemPeriod or Avalonia.Input.Key.Decimal)
+            entry.Type('.');
+        else if (key == Avalonia.Input.Key.Up)
+            entry.Cycle(1);
+        else if (key == Avalonia.Input.Key.Down)
+            entry.Cycle(-1);
+        else if (key == Avalonia.Input.Key.Left || key == Avalonia.Input.Key.Back)
+            entry.Back();
+        else if (key == Avalonia.Input.Key.Right)
+            entry.Move(1);
+        else if (key == Avalonia.Input.Key.Space)
+            entry.Advance();
+        else if (key is Avalonia.Input.Key.Enter or Avalonia.Input.Key.Escape)
+            entry.Finish();
+    }
+
+    // Gamepad and mouse input during initials entry: up/down dial the letter (holding repeats),
+    // left/right move, a fire button accepts a letter, Start finishes. The wheel dials, a click accepts.
+    private void UpdateInitials(double deltaTime)
+    {
+        _entryClock += deltaTime;
+        _entryIdle += deltaTime;
+        var entry = Entry!;
+
+        bool up = Input.PadUp, down = Input.PadDown, left = Input.PadLeft, right = Input.PadRight;
+        bool accept = Input.PadAccept, done = Input.PadDone, click = Input.IsLeftMousePressed;
+
+        if (EntryAcceptsInput)
+        {
+            if (up || down || left || right || accept || done || click || Input.MouseWheelDelta != 0)
+                _entryIdle = 0;
+
+            int dial = 0;
+            if ((up && !_wasPadUp) || (down && !_wasPadDown))
+            {
+                dial = up ? 1 : -1;
+                _padRepeat = 0.4;
+            }
+            else if (up || down)
+            {
+                _padRepeat -= deltaTime;
+                if (_padRepeat <= 0)
+                {
+                    dial = up ? 1 : -1;
+                    _padRepeat = 0.12;
+                }
+            }
+            if (Input.MouseWheelDelta != 0)
+                dial = Math.Sign(Input.MouseWheelDelta);
+            if (dial != 0)
+                entry.Cycle(dial);
+
+            if (left && !_wasPadLeft) entry.Back();
+            if (right && !_wasPadRight) entry.Move(1);
+            if ((accept && !_wasPadAccept) || (click && !_wasLeftMouse)) entry.Advance();
+            if (done && !_wasPadDone) entry.Finish();
+        }
+
+        _wasPadUp = up; _wasPadDown = down; _wasPadLeft = left; _wasPadRight = right;
+        _wasPadAccept = accept; _wasPadDone = done; _wasLeftMouse = click;
+
+        if (_entryIdle >= EntryTimeout)
+            entry.Finish();
+
+        if (entry.IsDone)
+        {
+            CommitEntry();
+            ShowHighScores(leadsToDemo: false);
+        }
     }
 
     private void BeginRun(GameState state)
@@ -198,13 +340,48 @@ public class GameEngine : IDisposable
                 }
                 _idleTimer = Input.IsAnyInput ? 0 : _idleTimer + deltaTime;
                 if (_idleTimer >= AttractIdleDelay)
-                    StartAttract();
+                    ShowHighScores(leadsToDemo: true);
+                return;
+
+            case GameState.HighScores:
+                UpdateIdleCastle(deltaTime);
+                UpdateExplosions(deltaTime);
+                if (shootPressed)
+                {
+                    StartNewGame();
+                    return;
+                }
+                if (newInput)
+                {
+                    ReturnToTitle();
+                    return;
+                }
+                _tableTimer -= deltaTime;
+                if (_tableTimer <= 0)
+                {
+                    if (_tableLeadsToDemo)
+                        StartAttract();
+                    else
+                        ReturnToTitle();
+                }
+                return;
+
+            case GameState.EnterInitials:
+                UpdateIdleCastle(deltaTime);
+                UpdateExplosions(deltaTime);
+                UpdateInitials(deltaTime);
                 return;
 
             case GameState.GameOver:
                 UpdateIdleCastle(deltaTime);
                 UpdateExplosions(deltaTime);
                 _gameOverTimer -= deltaTime;
+                if (_entryPending)
+                {
+                    if (_gameOverTimer <= GameOverInputDelay - GameOverBeforeEntry)
+                        BeginInitials();
+                    return;
+                }
                 if (shootPressed && _gameOverTimer <= 0)
                 {
                     StartNewGame();
@@ -581,11 +758,8 @@ public class GameEngine : IDisposable
         State = GameState.GameOver;
         Sound.StopDrone();
         _gameOverTimer = GameOverInputDelay;
-        if (Score > HighScore)
-        {
-            HighScore = Score;
-            SaveHighScore(HighScore);
-        }
+        _idleTimer = 0;
+        _entryPending = Table.Qualifies(Score);
     }
 
     private void DestroyCastle()
@@ -637,32 +811,5 @@ public class GameEngine : IDisposable
         if (lengthSquared < 1e-9) return Distance(p, a);
         double t = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy) / lengthSquared, 0, 1);
         return Distance(p, new Point(a.X + dx * t, a.Y + dy * t));
-    }
-
-    private static int LoadHighScore()
-    {
-        try
-        {
-            return File.Exists(HighScorePath) && int.TryParse(File.ReadAllText(HighScorePath).Trim(), out int score)
-                ? score
-                : 0;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
-
-    private static void SaveHighScore(int score)
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(HighScorePath)!);
-            File.WriteAllText(HighScorePath, score.ToString());
-        }
-        catch
-        {
-            // A read-only home folder just means the high score isn't remembered.
-        }
     }
 }
